@@ -150,18 +150,45 @@ function convertMessages(
         const toolResults = content.filter((b: { type?: string }) => b.type === 'tool_result')
         const otherContent = content.filter((b: { type?: string }) => b.type !== 'tool_result')
 
-        // Emit tool results as tool messages
-        for (const tr of toolResults) {
-          const trContent = Array.isArray(tr.content)
-            ? tr.content.map((c: { text?: string }) => c.text ?? '').join('\n')
-            : typeof tr.content === 'string'
-              ? tr.content
-              : JSON.stringify(tr.content ?? '')
-          result.push({
-            role: 'tool',
-            tool_call_id: tr.tool_use_id ?? 'unknown',
-            content: tr.is_error ? `Error: ${trContent}` : trContent,
-          })
+        if (toolResults.length > 0) {
+          // Check if the preceding assistant message used XML tool calls.
+          // If so, send tool results as <tool_response> text instead of
+          // role:tool messages, matching the local model's training format.
+          const prevMsg = result.at(-1)
+          const prevIsXmlTool = prevMsg?.role === 'assistant'
+            && typeof prevMsg.content === 'string'
+            && hasXmlToolCalls(prevMsg.content)
+
+          if (prevIsXmlTool) {
+            // Format tool results as <tool_response> text for local models
+            const parts: string[] = []
+            for (const tr of toolResults) {
+              const trContent = Array.isArray(tr.content)
+                ? tr.content.map((c: { text?: string }) => c.text ?? '').join('\n')
+                : typeof tr.content === 'string'
+                  ? tr.content
+                  : JSON.stringify(tr.content ?? '')
+              parts.push(tr.is_error ? `Error: ${trContent}` : trContent)
+            }
+            result.push({
+              role: 'user',
+              content: `<tool_response>\n${parts.join('\n---\n')}\n</tool_response>`,
+            })
+          } else {
+            // Standard OpenAI format: emit tool results as role:tool messages
+            for (const tr of toolResults) {
+              const trContent = Array.isArray(tr.content)
+                ? tr.content.map((c: { text?: string }) => c.text ?? '').join('\n')
+                : typeof tr.content === 'string'
+                  ? tr.content
+                  : JSON.stringify(tr.content ?? '')
+              result.push({
+                role: 'tool',
+                tool_call_id: tr.tool_use_id ?? 'unknown',
+                content: tr.is_error ? `Error: ${trContent}` : trContent,
+              })
+            }
+          }
         }
 
         // Emit remaining user content
@@ -185,12 +212,20 @@ function convertMessages(
           (b: { type?: string }) => b.type !== 'tool_use' && b.type !== 'thinking',
         )
 
+        const assistantText = convertContentBlocks(textContent) as string
+
+        // If the assistant text contains XML <tool_call> tags, the tool_use
+        // blocks were synthetically parsed from the text. Don't add native
+        // tool_calls — the local model doesn't understand that format.
+        // The XML text itself is the model's "tool call".
+        const isXmlToolMode = typeof assistantText === 'string' && hasXmlToolCalls(assistantText)
+
         const assistantMsg: OpenAIMessage = {
           role: 'assistant',
-          content: convertContentBlocks(textContent) as string,
+          content: assistantText,
         }
 
-        if (toolUses.length > 0) {
+        if (toolUses.length > 0 && !isXmlToolMode) {
           assistantMsg.tool_calls = toolUses.map(
             (tu: {
               id?: string
@@ -315,6 +350,55 @@ function makeMessageId(): string {
   return `msg_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
 }
 
+function makeToolUseId(): string {
+  return `toolu_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+}
+
+// ---------------------------------------------------------------------------
+// XML <tool_call> parsing for local models trained with text-based tool calls
+// ---------------------------------------------------------------------------
+// Local models (e.g. CoPaw-Flash) emit tool calls as XML in plain text:
+//   <tool_call>
+//   <function=Bash>
+//   <parameter=command>ls -la</parameter>
+//   </function>
+//   </tool_call>
+// This parser extracts them so the agentic loop can execute tools.
+
+interface ParsedXmlToolCall {
+  id: string
+  name: string
+  arguments: Record<string, string>
+}
+
+function hasXmlToolCalls(text: string): boolean {
+  return /<tool_call>[\s\S]*?<function=/.test(text)
+}
+
+function parseXmlToolCalls(text: string): ParsedXmlToolCall[] {
+  const results: ParsedXmlToolCall[] = []
+  const toolCallRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g
+  for (const match of text.matchAll(toolCallRegex)) {
+    const block = match[1]
+    const fnMatch = block.match(/<function=([^>]+)>/)
+    if (!fnMatch) continue
+
+    const name = fnMatch[1].trim()
+    const args: Record<string, string> = {}
+    const paramRegex = /<parameter=([^>]+)>\s*([\s\S]*?)\s*<\/parameter>/g
+    for (const pm of block.matchAll(paramRegex)) {
+      args[pm[1].trim()] = pm[2].trim()
+    }
+    results.push({ id: makeToolUseId(), name, arguments: args })
+  }
+  return results
+}
+
+/** Strip <tool_call>…</tool_call> blocks from text so only prose remains. */
+function stripXmlToolCalls(text: string): string {
+  return text.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim()
+}
+
 function convertChunkUsage(
   usage: OpenAIStreamChunk['usage'] | undefined,
 ): Partial<AnthropicUsage> | undefined {
@@ -343,6 +427,8 @@ async function* openaiStreamToAnthropic(
   let lastStopReason: 'tool_use' | 'max_tokens' | 'end_turn' | null = null
   let hasEmittedFinalUsage = false
   let hasProcessedFinishReason = false
+  // Accumulate streamed text so we can detect XML <tool_call> tags from local models
+  let collectedText = ''
 
   // Emit message_start
   yield {
@@ -398,6 +484,7 @@ async function* openaiStreamToAnthropic(
         // Text content — use != null to distinguish absent field from empty string,
         // some providers send "" as first delta to signal streaming start
         if (delta.content != null) {
+          collectedText += delta.content
           if (!hasEmittedContentStart) {
             yield {
               type: 'content_block_start',
@@ -522,6 +609,56 @@ async function* openaiStreamToAnthropic(
           usage: chunkUsage,
         }
         hasEmittedFinalUsage = true
+      }
+    }
+  }
+
+  // ---- XML <tool_call> fallback for local models ----
+  // If no native function-calling tool_calls were emitted but the streamed text
+  // contains XML <tool_call> tags, parse them and emit synthetic tool_use blocks
+  // so the agentic loop in query.ts can execute them.
+  if (activeToolCalls.size === 0 && hasXmlToolCalls(collectedText)) {
+    const xmlCalls = parseXmlToolCalls(collectedText)
+    if (xmlCalls.length > 0) {
+      // Close the text content block if the finish_reason handler hasn't already,
+      // then advance the index past it for the new tool_use blocks.
+      if (hasEmittedContentStart) {
+        if (!hasProcessedFinishReason) {
+          yield { type: 'content_block_stop', index: contentBlockIndex }
+        }
+        contentBlockIndex++
+      }
+
+      // Emit each parsed tool call as a proper tool_use content block
+      for (const tc of xmlCalls) {
+        const toolBlockIndex = contentBlockIndex
+        yield {
+          type: 'content_block_start',
+          index: toolBlockIndex,
+          content_block: {
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.name,
+            input: {},
+          },
+        }
+        yield {
+          type: 'content_block_delta',
+          index: toolBlockIndex,
+          delta: {
+            type: 'input_json_delta',
+            partial_json: JSON.stringify(tc.arguments),
+          },
+        }
+        yield { type: 'content_block_stop', index: toolBlockIndex }
+        contentBlockIndex++
+      }
+
+      // Override stop_reason to tool_use so the agentic loop continues
+      lastStopReason = 'tool_use'
+      yield {
+        type: 'message_delta',
+        delta: { stop_reason: 'tool_use', stop_sequence: null },
       }
     }
   }
@@ -806,12 +943,33 @@ class OpenAIShimMessages {
       }
     }
 
+    // XML <tool_call> fallback for local models: if no native tool_calls
+    // but the text contains XML <tool_call> tags, parse and append them.
+    const textContent = choice?.message?.content ?? ''
+    let hasXmlTools = false
+    if (!choice?.message?.tool_calls?.length && hasXmlToolCalls(textContent)) {
+      const xmlCalls = parseXmlToolCalls(textContent)
+      if (xmlCalls.length > 0) {
+        hasXmlTools = true
+        for (const tc of xmlCalls) {
+          content.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.name,
+            input: tc.arguments,
+          })
+        }
+      }
+    }
+
     const stopReason =
-      choice?.finish_reason === 'tool_calls'
+      hasXmlTools
         ? 'tool_use'
-        : choice?.finish_reason === 'length'
-          ? 'max_tokens'
-          : 'end_turn'
+        : choice?.finish_reason === 'tool_calls'
+          ? 'tool_use'
+          : choice?.finish_reason === 'length'
+            ? 'max_tokens'
+            : 'end_turn'
 
     return {
       id: data.id ?? makeMessageId(),
