@@ -70,7 +70,7 @@ export function CondensedLogo() {
   }
   useEffect(t2, t3);
   const textWidth = Math.max(columns - 15, 20);
-  const truncatedVersion = truncate(version, Math.max(textWidth - 13, 6));
+  const truncatedVersion = truncate(version, Math.max(textWidth - 15, 6));
   const effortSuffix = getEffortSuffix(model, effortValue);
   const {
     shouldSplit,
@@ -88,7 +88,7 @@ export function CondensedLogo() {
   }
   let t5;
   if ($[8] === Symbol.for("react.memo_cache_sentinel")) {
-    t5 = <Text bold={true}>Claude Code</Text>;
+    t5 = <Text bold={true}>Data Analyst</Text>;
     $[8] = t5;
   } else {
     t5 = $[8];

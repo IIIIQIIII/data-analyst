@@ -1,283 +1,110 @@
-# CoPaw Trajectory Collector
+# Data Analyst
 
-Agent Trajectory Collector for generating CoPaw-Flash training datasets. Uses a dual-AI architecture where both user and assistant roles are played by AI models.
+Interactive TUI data analysis tool powered by local/remote LLM models. Built on the Claude Code engine with a streamlined toolset focused on autonomous data exploration, analysis, and visualization.
 
-## Overview
+## Features
 
-This tool collects agent trajectories in the CoPaw-Flash format for fine-tuning language models on tool-use and data analysis tasks. It leverages the claude-code-clean framework for stable agent execution.
-
-### Key Features
-
-- **Dual-AI Architecture**: User Agent simulates non-technical users, Analyst Agent performs data analysis
-- **CoPaw-Flash Format**: Output compatible with ms-swift training pipeline
-- **OpenAI-Compatible API**: Works with OpenRouter, DeepSeek, Ollama, and other providers
-- **Real Tool Execution**: Bash, Read, Write, Glob, Grep, Edit tools with actual execution
-- **Python Data Analysis**: Pre-configured uv venv with pandas, numpy, matplotlib, seaborn
-- **Batch Collection**: Process multiple datasets with parallel workers and API key rotation
-- **Multi-Model Support**: Adapters for different LLM tool call formats (JSON, XML)
+- **Interactive TUI**: Rich terminal interface with blue-themed design
+- **OpenAI-Compatible API**: Works with any OpenAI-compatible endpoint — OpenRouter, Ollama, vLLM, LM Studio, SiliconFlow, etc.
+- **6 Core Tools**: Bash, Read, Write, Edit, Glob, Grep — everything needed for data analysis workflows
+- **Compact System Prompt**: ~2k token data-analyst-focused prompt (vs ~30k generic prompt), optimized for smaller local models
+- **Python Analysis**: Run pandas, numpy, matplotlib, seaborn, scipy, scikit-learn scripts directly
+- **Auto-Visualization**: Models save plots with `plt.savefig()` to the working directory
 
 ## Quick Start
 
 ### Prerequisites
 
-- [Bun](https://bun.sh) (v1.3+)
-- [uv](https://github.com/astral-sh/uv) (for Python environment)
-- Linux/macOS/WSL2
+- [Bun](https://bun.sh) (v1.1+)
+- An OpenAI-compatible API endpoint
 
 ### Installation
 
 ```bash
-# Install dependencies
+git clone https://github.com/IIIIQIIII/data-analyst.git
+cd data-analyst
 bun install
-
-# Setup Python analysis environment
-uv venv .venv-analysis --python 3.12
-uv pip install pandas numpy matplotlib seaborn scipy scikit-learn --python .venv-analysis/bin/python
 ```
 
-### Environment Setup
+### Configuration
 
-Create a `.env` file with your API keys:
+Set your API endpoint and model via environment variables:
 
 ```bash
-# .env
-OPENROUTER_API_KEYS=sk-or-v1-xxx,sk-or-v1-yyy,sk-or-v1-zzz
+# OpenRouter example
+export CLAUDE_CODE_USE_OPENAI=1
+export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+export OPENAI_API_KEY=sk-or-v1-your-key-here
+export OPENAI_MODEL=z-ai/glm-5.1
+
+# Ollama example
+export CLAUDE_CODE_USE_OPENAI=1
+export OPENAI_BASE_URL=http://localhost:11434/v1
+export OPENAI_API_KEY=unused
+export OPENAI_MODEL=qwen2.5:14b
 ```
 
-> **IMPORTANT**: Never commit the `.env` file to git. It contains sensitive API keys.
+Note: `CLAUDE_CODE_USE_OPENAI=1` is auto-set by the CLI entry point, but you can also set it explicitly.
 
-### Run Single Trajectory Collection
+### Run
 
 ```bash
-CLAUDE_CODE_USE_OPENAI=1 \
-OPENAI_API_KEY=your-api-key \
-OPENAI_BASE_URL=https://openrouter.ai/api/v1 \
-OPENAI_MODEL=qwen/qwen3.6-plus:free \
-bun run collect \
-  --dataset-dir ./test_data \
-  --dataset-title "Sales Data Analysis" \
-  --output-dir ./trajectory_output \
-  --max-turns 3
+bun run start
 ```
 
-## Batch Collection
-
-For collecting trajectories from multiple datasets at scale.
-
-### Batch Collection with Qwen (JSON format)
+Or directly:
 
 ```bash
-# Load environment variables and run
-source .env
-bun run src/entrypoints/batchCollect.tsx \
-  --kaggle-dir ./kaggle-top1000 \
-  --output-dir ./copaw-trajectories \
-  --max-turns 3 \
-  --checkpoint ./checkpoint.json
-```
-
-### Batch Collection with Stepfun (XML format)
-
-Stepfun uses a different tool call format (XML-like). Use the dedicated adapter:
-
-```bash
-source .env
-bun run src/entrypoints/batchCollectStepfun.tsx \
-  --kaggle-dir ./kaggle-top1000 \
-  --output-dir ./copaw-trajectories-stepfun \
-  --max-turns 2 \
-  --checkpoint ./checkpoint-stepfun.json
-```
-
-### Batch Collection Features
-
-- **Parallel Workers**: Multiple API keys run concurrent workers
-- **Checkpoint/Resume**: Automatically saves progress, can resume after interruption
-- **API Key Rotation**: Distributes load across multiple API keys to avoid rate limits
-- **Progress Tracking**: Real-time progress and statistics
-
-### Command Line Options (Batch)
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--kaggle-dir` | Directory containing dataset folders | `./kaggle-top1000` |
-| `--output-dir` | Directory for output trajectories | `./copaw-trajectories` |
-| `--max-turns` | Maximum conversation turns | `3` |
-| `--checkpoint` | Checkpoint file for resume | `./checkpoint.json` |
-| `--start-index` | Start from specific index | `0` |
-| `--limit` | Limit number of datasets (0=all) | `0` |
-| `--delay` | Delay between datasets (ms) | `5000` |
-
-## Output Format
-
-### JSONL (Training Format)
-
-```json
-{"messages":[
-  {"role":"user","content":"Help me analyze this sales data..."},
-  {"role":"system","content":"You are a professional Data Analyst..."},
-  {"role":"assistant","content":"<tool_call>\n{\"name\": \"Glob\", \"arguments\": {\"pattern\": \"*.csv\"}}\n</tool_call>"},
-  {"role":"user","content":"<tool_response>\nsales_data.csv\n</tool_response>"},
-  {"role":"assistant","content":"I found the data file. Let me read it..."}
-]}
-```
-
-### Tool Call Formats
-
-**JSON Format (Qwen, GPT, etc.)**
-```xml
-<tool_call>
-{"name": "Bash", "arguments": {"command": "python analysis.py"}}
-</tool_call>
-```
-
-**XML Format (Stepfun)**
-```xml
-<tool_call>
-<function=Bash>
-<parameter=command>python analysis.py</parameter>
-</function>
-</tool_call>
-```
-
-### Tool Response Format
-
-```xml
-<tool_response>
-Analysis complete. Total revenue: $162,270.15
-</tool_response>
+bun run --preload ./stubs/globals.ts ./src/entrypoints/cli.tsx
 ```
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Trajectory Collector                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐         ┌──────────────┐                  │
-│  │  User Agent  │ ──────> │Analyst Agent │                  │
-│  │ (Simulates   │         │ (Data        │                  │
-│  │  non-tech    │ <────── │  Analysis)   │                  │
-│  │  user)       │         │              │                  │
-│  └──────────────┘         └──────┬───────┘                  │
-│                                  │                           │
-│                           ┌──────▼───────┐                  │
-│                           │ Tool Executor │                  │
-│                           │ Bash/Read/    │                  │
-│                           │ Write/Glob/   │                  │
-│                           │ Grep/Edit     │                  │
-│                           └──────┬───────┘                  │
-│                                  │                           │
-│                           ┌──────▼───────┐                  │
-│                           │   Python     │                  │
-│                           │ Environment  │                  │
-│                           │ (uv venv)    │                  │
-│                           └──────────────┘                  │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │ Output Files    │
-                    │ - .jsonl        │
-                    │ - .json (full)  │
-                    └─────────────────┘
-```
+This project is a focused fork of the Claude Code TUI framework. Key modifications:
 
-## Performance
+| Component | Change |
+|-----------|--------|
+| System Prompt | Replaced ~30k generic prompt with ~2k data-analyst prompt |
+| Tools | Trimmed to 6 core tools (Bash, Read, Write, Edit, Glob, Grep) |
+| API Layer | Uses built-in OpenAI-compatible shim (`openaiShim.ts`) |
+| Branding | Custom blue theme, bar chart icon, "Data Analyst" identity |
+| Entry Point | Simplified `cli.tsx`, auto-enables OpenAI mode |
 
-### Qwen (qwen/qwen3.6-plus:free)
-
-| Metric | Value |
-|--------|-------|
-| Time per trajectory | ~4 minutes |
-| Input tokens | ~50,000 |
-| Output tokens | ~5,000 |
-| Messages generated | ~20 |
-| Tool calls | ~10-15 |
-| Success rate | ~52% |
-
-### Stepfun (stepfun/step-3.5-flash:free)
-
-| Metric | Value |
-|--------|-------|
-| Time per trajectory | ~1-2 minutes |
-| Input tokens | ~60,000 |
-| Output tokens | ~6,000 |
-| Messages generated | ~25 |
-| Tool calls | ~10-12 |
-| Success rate | ~99% |
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| **Bash** | Execute shell commands, run Python scripts |
-| **Read** | Read file contents with line numbers |
-| **Write** | Create/overwrite files |
-| **Glob** | Find files by pattern |
-| **Grep** | Search for patterns in files |
-| **Edit** | Edit existing files (find & replace) |
-
-## Project Structure
+### Project Structure
 
 ```
-copaw-trajectory-collector/
-├── src/
-│   ├── entrypoints/
-│   │   ├── trajectoryCollect.tsx   # Single trajectory collection
-│   │   ├── batchCollect.tsx        # Batch collection (Qwen/JSON)
-│   │   └── batchCollectStepfun.tsx # Batch collection (Stepfun/XML)
-│   └── trajectory/
-│       ├── collector.ts            # Trajectory recording
-│       ├── dualAgent.ts            # Dual-AI coordination
-│       └── stepfunAdapter.ts       # Stepfun XML format adapter
-├── test_data/                      # Sample datasets
-│   └── sales_data.csv
-├── .venv-analysis/                 # Python environment
-├── docs/                           # Documentation
-├── .env                            # API keys (DO NOT COMMIT)
-└── README.md
+src/
+├── entrypoints/cli.tsx     # Simplified entry point
+├── constants/prompts.ts    # Data-analyst system prompt
+├── services/api/
+│   └── openaiShim.ts       # OpenAI-compatible API bridge
+├── components/LogoV2/      # TUI components (blue theme)
+├── utils/theme.ts          # Blue color scheme
+└── tools.ts                # 6-tool configuration
 ```
 
-## Model Adapters
+## Supported Models
 
-### Adding Support for New Models
+Any model accessible via OpenAI-compatible API, including:
 
-If a model uses a different tool call format, create an adapter in `src/trajectory/`:
+- **OpenRouter**: GLM-5.1, DeepSeek, Qwen, Llama, etc.
+- **Ollama**: Local models (Qwen2.5, Llama 3, Mistral, etc.)
+- **vLLM / LM Studio**: Self-hosted inference servers
+- **SiliconFlow**: Chinese model hosting platform
+- **Any OpenAI-compatible endpoint**
 
-1. Implement parser function for the tool call format
-2. Implement `hasToolCalls()` detection function
-3. Create system prompt generator with tool definitions
-4. Create dedicated batch collection entry point
+## Example Usage
 
-See `stepfunAdapter.ts` as an example.
+```
+> Load the CSV file in this directory and show me a summary
 
-## Documentation
+> Create a scatter plot of price vs. rating, colored by category
 
-See the `docs/` directory for detailed documentation:
+> Run a correlation analysis on all numeric columns
 
-- [Data Collection Guide](docs/data-collection-guide.md) - How to collect trajectories
-- [Output Format Specification](docs/output-format.md) - Dataset format details
-- [API Configuration](docs/api-configuration.md) - Setting up different LLM providers
-
-## HuggingFace Datasets
-
-Collected trajectories are available on HuggingFace:
-
-- [copaw-data-analysis-trajectories](https://huggingface.co/datasets/LocoreMind/copaw-data-analysis-trajectories) - Qwen model trajectories
-- [copaw-trajectories-stepfun](https://huggingface.co/datasets/LocoreMind/copaw-trajectories-stepfun) - Stepfun model trajectories
-
-## Based On
-
-This project is based on [claude-code-clean](https://github.com/IIIIQIIII/claude-code-clean), a privacy-focused fork of Anthropic's Claude Code with all telemetry removed.
+> Find outliers using IQR method and save the cleaned data
+```
 
 ## License
 
-MIT License - See LICENSE file for details.
-
----
-
-**Version:** 1.1.0
-**Last Updated:** 2026-04-06
+Based on [Claude Code](https://github.com/anthropics/claude-code) by Anthropic.
