@@ -2,6 +2,10 @@
 
 Interactive TUI data analysis tool powered by local/remote LLM models. Built on the Claude Code engine with a streamlined toolset focused on autonomous data exploration, analysis, and visualization.
 
+<p align="center">
+  <img src="assets/dataanalyst-demo.gif" alt="Data Analyst Demo" width="800">
+</p>
+
 ## Features
 
 - **Interactive TUI**: Rich terminal interface with blue-themed design
